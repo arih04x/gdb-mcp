@@ -15,10 +15,6 @@ English | [简体中文](README.zh-CN.md)
   </p>
 </div>
 
-## What Is `asset/gdb.svg`?
-
-`asset/gdb.svg` is the project identity icon. It is used as the default visual mark for `gdb-mcp` in documentation and tooling pages.
-
 ## Overview
 
 `gdb-mcp` is a Python MCP server that turns common GDB operations into MCP tools.
@@ -56,9 +52,12 @@ uv run gdb-mcp
 ```bash
 uv run gdb-mcp doctor
 uv run gdb-mcp install
+uv run gdb-mcp install --client Codex
 uv run gdb-mcp config
 uv run gdb-mcp uninstall
 ```
+
+`install` now supports a full cross-platform client matrix (similar to arida-pro-mcp style), and `--client` can scope installation to selected clients.
 
 ## Tool List
 

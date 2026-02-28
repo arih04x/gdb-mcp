@@ -23,10 +23,22 @@ def _build_parser() -> argparse.ArgumentParser:
     install = subparsers.add_parser("install", help="Check environment and install MCP config")
     install.add_argument("--server-name", default="gdb", help="Server name used in MCP config")
     install.add_argument("--quiet", action="store_true", help="Reduce install output")
+    install.add_argument(
+        "--client",
+        action="append",
+        default=[],
+        help="Install only selected client(s), e.g. --client Codex",
+    )
 
     uninstall = subparsers.add_parser("uninstall", help="Remove MCP config from detected clients")
     uninstall.add_argument("--server-name", default="gdb", help="Server name used in MCP config")
     uninstall.add_argument("--quiet", action="store_true", help="Reduce uninstall output")
+    uninstall.add_argument(
+        "--client",
+        action="append",
+        default=[],
+        help="Uninstall only selected client(s), e.g. --client Codex",
+    )
 
     config = subparsers.add_parser("config", help="Print manual MCP config snippets")
     config.add_argument("--server-name", default="gdb", help="Server name used in MCP config")
@@ -63,7 +75,11 @@ def _cmd_install(args: argparse.Namespace) -> int:
     print("[Environment]")
     print(json.dumps(env, indent=2))
 
-    results = install_mcp_servers(server_name=args.server_name, quiet=args.quiet)
+    try:
+        results = install_mcp_servers(server_name=args.server_name, quiet=args.quiet, clients=args.client)
+    except ValueError as exc:
+        logger.error("{}", exc)
+        return 1
     _print_result_table("[Install Results]", results)
 
     failures = [row for row in results if row.get("status") == "failed"]
@@ -71,7 +87,11 @@ def _cmd_install(args: argparse.Namespace) -> int:
 
 
 def _cmd_uninstall(args: argparse.Namespace) -> int:
-    results = uninstall_mcp_servers(server_name=args.server_name, quiet=args.quiet)
+    try:
+        results = uninstall_mcp_servers(server_name=args.server_name, quiet=args.quiet, clients=args.client)
+    except ValueError as exc:
+        logger.error("{}", exc)
+        return 1
     _print_result_table("[Uninstall Results]", results)
 
     failures = [row for row in results if row.get("status") == "failed"]

@@ -15,10 +15,6 @@
   </p>
 </div>
 
-## `asset/gdb.svg` 是什么？
-
-`asset/gdb.svg` 是项目视觉标识，用于 README 和相关工具页面的默认图标展示。
-
 ## 项目简介
 
 `gdb-mcp` 是一个 Python 实现的 MCP Server，将常见 GDB 调试操作暴露为 MCP 工具。
@@ -56,9 +52,12 @@ uv run gdb-mcp
 ```bash
 uv run gdb-mcp doctor
 uv run gdb-mcp install
+uv run gdb-mcp install --client Codex
 uv run gdb-mcp config
 uv run gdb-mcp uninstall
 ```
+
+`install` 现已支持三平台全客户端矩阵（风格对齐 arida-pro-mcp），并可通过 `--client` 只安装指定客户端。
 
 ## 工具列表
 
