@@ -1,0 +1,13 @@
+{
+  "mode": "advanced",
+  "max_output_chars": 20000,
+  "advanced_tools": [
+    "gdb_attach",
+    "gdb_load_core",
+    "gdb_set_watchpoint",
+    "gdb_info_threads",
+    "gdb_thread_select",
+    "gdb_frame_select",
+    "gdb_collect_crash_report"
+  ]
+}

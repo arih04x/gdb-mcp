@@ -28,9 +28,14 @@
 
 - 多会话 GDB 管理
 - 加载程序 / 附加进程 / 加载 core dump
-- 断点与执行控制（`continue` / `step` / `next` / `finish`）
-- 运行时信息查看：回溯、寄存器、内存、表达式、源码片段
+- 断点全生命周期与执行控制（`set/list/toggle/delete`、`continue` / `step` / `next`）
+- 运行时信息查看：回溯帧、寄存器、内存、表达式（含结构化字段）
+- 轻量接入 `pygdbmi` 做 GDB/MI 解析（`gdb_command` 在存在 MI 输出时返回 `miRecords`）
 - MCP 配置安装（`gdb-mcp install`）
+
+结构化优先返回策略：
+- 当结构化解析成功（如 `miRecords` / `frames` / `registers` / `breakpoints`）时，不再返回对应原始文本字段。
+- 仅在结构化解析无有效结果时，才保留原始文本作为兜底。
 
 ## 快速开始
 
@@ -47,6 +52,26 @@ uv sync --extra dev
 uv run gdb-mcp
 ```
 
+## 运行模式与配置
+
+`gdb-mcp` 运行时配置读取顺序：
+
+1. `GDB_MCP_CONFIG`（支持相对路径）
+2. 项目根目录默认 `./config.json`
+
+环境变量可覆盖配置文件中的值：
+
+- `GDB_MODE=default|advanced`
+- `GDB_MCP_MAX_OUTPUT_CHARS=<int>`
+
+可通过 `gdb_get_capabilities` 查看当前生效能力与策略。
+`default` 模式下高级工具不会出现在 `tools/list`。
+
+模式定位：
+
+- `default`：提供稳定、常用的基础调试能力，足以覆盖大多数日常调试任务。
+- `advanced`：在 `default` 基础上提供可定制的深度分析流程，服务复杂问题与更深层的 Pwn 场景需求。
+
 ## CLI 命令
 
 ```bash
@@ -62,33 +87,29 @@ uv run gdb-mcp uninstall
 ## 工具列表
 
 - `gdb_start`
+- `gdb_get_capabilities`
 - `gdb_load`
-- `gdb_set_args`
 - `gdb_command`
 - `gdb_terminate`
 - `gdb_list_sessions`
-- `gdb_attach`
-- `gdb_load_core`
 - `gdb_set_breakpoint`
 - `gdb_list_breakpoints`
 - `gdb_delete_breakpoints`
 - `gdb_toggle_breakpoints`
-- `gdb_set_watchpoint`
 - `gdb_continue`
 - `gdb_step`
 - `gdb_next`
-- `gdb_finish`
 - `gdb_backtrace`
 - `gdb_print`
 - `gdb_examine`
 - `gdb_info_registers`
-- `gdb_info_threads`
-- `gdb_thread_select`
-- `gdb_frame_select`
-- `gdb_frame_up`
-- `gdb_frame_down`
-- `gdb_list_source`
-- `gdb_collect_crash_report`
+- `gdb_attach`（仅 advanced）
+- `gdb_load_core`（仅 advanced）
+- `gdb_set_watchpoint`（仅 advanced）
+- `gdb_info_threads`（仅 advanced）
+- `gdb_thread_select`（仅 advanced）
+- `gdb_frame_select`（仅 advanced）
+- `gdb_collect_crash_report`（仅 advanced）
 
 ## 示例
 

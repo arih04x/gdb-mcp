@@ -28,9 +28,14 @@ It is designed for:
 
 - Multi-session GDB management
 - Program load / process attach / core dump load
-- Breakpoints and execution control (`continue`, `step`, `next`, `finish`)
-- Runtime inspection: backtrace, registers, memory, expressions, source listing
+- Breakpoint lifecycle and execution control (`set/list/toggle/delete`, `continue`, `step`, `next`)
+- Runtime inspection with structured fields: backtrace frames, registers, memory, expressions
+- Lightweight GDB/MI parsing via `pygdbmi` (`gdb_command` includes `miRecords` when MI lines are present)
 - MCP client config installer (`gdb-mcp install`)
+
+Structured-first response policy:
+- When structured parsing succeeds (for example `miRecords`/`frames`/`registers`/`breakpoints`), the corresponding raw text field is omitted.
+- Raw text is kept only as a fallback when structured parsing yields no usable data.
 
 ## Quick Start
 
@@ -47,6 +52,26 @@ uv sync --extra dev
 uv run gdb-mcp
 ```
 
+## Runtime Modes and Config
+
+`gdb-mcp` reads runtime config from:
+
+1. `GDB_MCP_CONFIG` (supports relative path)
+2. default `./config.json` in the project root
+
+Environment variables can override config values:
+
+- `GDB_MODE=default|advanced`
+- `GDB_MCP_MAX_OUTPUT_CHARS=<int>`
+
+Use `gdb_get_capabilities` to inspect active mode/policy at runtime.
+In `default` mode, advanced tools are hidden from `tools/list`.
+
+Mode intent:
+
+- `default`: stable baseline with high-frequency debugging capabilities, sufficient for most day-to-day debugging workflows.
+- `advanced`: extends `default` with deeper, customizable analysis flows for complex debugging and deeper pwn-oriented needs.
+
 ## CLI Commands
 
 ```bash
@@ -62,33 +87,29 @@ uv run gdb-mcp uninstall
 ## Tool List
 
 - `gdb_start`
+- `gdb_get_capabilities`
 - `gdb_load`
-- `gdb_set_args`
 - `gdb_command`
 - `gdb_terminate`
 - `gdb_list_sessions`
-- `gdb_attach`
-- `gdb_load_core`
 - `gdb_set_breakpoint`
 - `gdb_list_breakpoints`
 - `gdb_delete_breakpoints`
 - `gdb_toggle_breakpoints`
-- `gdb_set_watchpoint`
 - `gdb_continue`
 - `gdb_step`
 - `gdb_next`
-- `gdb_finish`
 - `gdb_backtrace`
 - `gdb_print`
 - `gdb_examine`
 - `gdb_info_registers`
-- `gdb_info_threads`
-- `gdb_thread_select`
-- `gdb_frame_select`
-- `gdb_frame_up`
-- `gdb_frame_down`
-- `gdb_list_source`
-- `gdb_collect_crash_report`
+- `gdb_attach` (advanced only)
+- `gdb_load_core` (advanced only)
+- `gdb_set_watchpoint` (advanced only)
+- `gdb_info_threads` (advanced only)
+- `gdb_thread_select` (advanced only)
+- `gdb_frame_select` (advanced only)
+- `gdb_collect_crash_report` (advanced only)
 
 ## Example
 

@@ -11,6 +11,8 @@ from mcp.server.fastmcp import FastMCP
 
 from gdb_mcp.exceptions import GdbCommandTimeoutError, GdbSessionError, SessionNotFoundError
 from gdb_mcp.gdb_manager import GdbSessionManager, install_signal_cleanup
+from gdb_mcp.parsing import parse_backtrace_frames, parse_breakpoints, parse_mi_records, parse_mi_streams, parse_registers
+from gdb_mcp.settings import load_server_settings
 
 RECOVERABLE_ERRORS = (
     FileNotFoundError,
@@ -25,9 +27,23 @@ RECOVERABLE_ERRORS = (
 mcp = FastMCP("gdb-mcp-server")
 manager = GdbSessionManager()
 install_signal_cleanup(manager)
+settings = load_server_settings()
+
+
+def _truncate_payload(value: Any, max_chars: int) -> Any:
+    if isinstance(value, str):
+        if len(value) <= max_chars:
+            return value
+        return f"{value[:max_chars]}\n...[truncated]"
+    if isinstance(value, dict):
+        return {key: _truncate_payload(item, max_chars) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_truncate_payload(item, max_chars) for item in value]
+    return value
 
 
 def _ok(**payload: Any) -> dict[str, Any]:
+    payload = _truncate_payload(payload, settings.max_output_chars)
     payload["ok"] = True
     return payload
 
@@ -38,6 +54,17 @@ def _err(exc: BaseException) -> dict[str, Any]:
         "error": str(exc),
         "error_type": type(exc).__name__,
     }
+
+
+def _require_advanced(tool_name: str) -> None:
+    settings.require_tool(tool_name)
+
+
+def _advanced_tool(func: Any) -> Any:
+    tool_name = getattr(func, "__name__", "")
+    if tool_name in settings.advanced_tools and not settings.is_advanced():
+        return func
+    return mcp.tool()(func)
 
 
 def _normalize_arguments(arguments: list[str] | str | None) -> list[str] | None:
@@ -61,6 +88,23 @@ def _normalize_arguments(arguments: list[str] | str | None) -> list[str] | None:
     if isinstance(parsed, (int, float, bool)):
         return [str(parsed)]
     raise ValueError("string arguments must be shell-like text or a JSON string array/object-free scalar")
+
+
+@mcp.tool()
+def gdb_get_capabilities() -> dict[str, Any]:
+    """Return runtime capability switches and active policy."""
+    return _ok(
+        mode=settings.mode,
+        configPath=settings.config_path,
+        maxOutputChars=settings.max_output_chars,
+        commandPolicy={
+            "mode": settings.command_policy.mode,
+            "allowPrefixes": list(settings.command_policy.allow_prefixes),
+            "denyPrefixes": list(settings.command_policy.deny_prefixes),
+            "dangerousPrefixes": list(settings.command_policy.dangerous_prefixes),
+        },
+        advancedTools=sorted(settings.advanced_tools),
+    )
 
 
 @mcp.tool()
@@ -96,24 +140,22 @@ def gdb_load(sessionId: str, program: str, arguments: list[str] | str | None = N
 
 
 @mcp.tool()
-def gdb_set_args(sessionId: str, arguments: list[str] | str) -> dict[str, Any]:
-    """Set program arguments for the current target."""
-    try:
-        normalized_args = _normalize_arguments(arguments)
-        if normalized_args is None:
-            normalized_args = []
-        output = manager.set_program_args(session_id=sessionId, arguments=normalized_args)
-        return _ok(message="Program arguments updated", output=output)
-    except RECOVERABLE_ERRORS as exc:
-        return _err(exc)
-
-
-@mcp.tool()
 def gdb_command(sessionId: str, command: str) -> dict[str, Any]:
     """Execute an arbitrary GDB command."""
     try:
+        settings.validate_command(command)
         output = manager.command(session_id=sessionId, command=command)
-        return _ok(message=f"Command executed: {command}", output=output)
+        mi_records = parse_mi_records(output)
+        mi_streams = parse_mi_streams(output)
+        payload: dict[str, Any] = {
+            "message": f"Command executed: {command}",
+            "miRecords": mi_records,
+        }
+        if mi_streams:
+            payload["miStreams"] = mi_streams
+        if not mi_records and not mi_streams:
+            payload["output"] = output
+        return _ok(**payload)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
@@ -135,20 +177,22 @@ def gdb_list_sessions() -> dict[str, Any]:
     return _ok(count=len(sessions), sessions=sessions)
 
 
-@mcp.tool()
+@_advanced_tool
 def gdb_attach(sessionId: str, pid: int) -> dict[str, Any]:
     """Attach GDB to a process."""
     try:
+        _require_advanced("gdb_attach")
         output = manager.attach(session_id=sessionId, pid=pid)
         return _ok(message=f"Attached to process: {pid}", output=output)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
 
-@mcp.tool()
+@_advanced_tool
 def gdb_load_core(sessionId: str, program: str, corePath: str) -> dict[str, Any]:
     """Load executable and core file into GDB."""
     try:
+        _require_advanced("gdb_load_core")
         result = manager.load_core(session_id=sessionId, program=program, core_path=corePath)
         return _ok(
             message=f"Loaded core file: {corePath}",
@@ -179,7 +223,14 @@ def gdb_list_breakpoints(sessionId: str) -> dict[str, Any]:
     """List breakpoints/watchpoints in current session."""
     try:
         output = manager.list_breakpoints(session_id=sessionId)
-        return _ok(message="Breakpoints listed", output=output)
+        breakpoints = parse_breakpoints(output)
+        payload: dict[str, Any] = {
+            "message": "Breakpoints listed",
+            "breakpoints": breakpoints,
+        }
+        if not breakpoints:
+            payload["output"] = output
+        return _ok(**payload)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
@@ -205,10 +256,11 @@ def gdb_toggle_breakpoints(sessionId: str, breakpointIds: list[int], enabled: bo
         return _err(exc)
 
 
-@mcp.tool()
+@_advanced_tool
 def gdb_set_watchpoint(sessionId: str, expression: str, mode: str = "write") -> dict[str, Any]:
     """Set a write/read/access watchpoint on expression."""
     try:
+        _require_advanced("gdb_set_watchpoint")
         output = manager.set_watchpoint(session_id=sessionId, expression=expression, mode=mode)
         return _ok(message=f"Watchpoint set ({mode})", output=output)
     except RECOVERABLE_ERRORS as exc:
@@ -246,21 +298,18 @@ def gdb_next(sessionId: str, instructions: bool = False) -> dict[str, Any]:
 
 
 @mcp.tool()
-def gdb_finish(sessionId: str) -> dict[str, Any]:
-    """Run until current function returns."""
-    try:
-        output = manager.finish(session_id=sessionId)
-        return _ok(message="Finish executed", output=output)
-    except RECOVERABLE_ERRORS as exc:
-        return _err(exc)
-
-
-@mcp.tool()
 def gdb_backtrace(sessionId: str, full: bool = False, limit: int | None = None) -> dict[str, Any]:
     """Get backtrace from current frame."""
     try:
         output = manager.backtrace(session_id=sessionId, full=full, limit=limit)
-        return _ok(message="Backtrace collected", output=output)
+        frames = parse_backtrace_frames(output)
+        payload: dict[str, Any] = {
+            "message": "Backtrace collected",
+            "frames": frames,
+        }
+        if not frames:
+            payload["output"] = output
+        return _ok(**payload)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
@@ -295,81 +344,52 @@ def gdb_info_registers(sessionId: str, register: str | None = None) -> dict[str,
     """Print all or selected registers."""
     try:
         output = manager.info_registers(session_id=sessionId, register=register)
-        return _ok(message="Register info collected", output=output)
+        registers = parse_registers(output)
+        payload: dict[str, Any] = {
+            "message": "Register info collected",
+            "registers": registers,
+        }
+        if not registers:
+            payload["output"] = output
+        return _ok(**payload)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
 
-@mcp.tool()
+@_advanced_tool
 def gdb_info_threads(sessionId: str) -> dict[str, Any]:
     """List threads for current inferior."""
     try:
+        _require_advanced("gdb_info_threads")
         output = manager.info_threads(session_id=sessionId)
         return _ok(message="Thread info collected", output=output)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
 
-@mcp.tool()
+@_advanced_tool
 def gdb_thread_select(sessionId: str, threadId: int) -> dict[str, Any]:
     """Select an active thread."""
     try:
+        _require_advanced("gdb_thread_select")
         output = manager.select_thread(session_id=sessionId, thread_id=threadId)
         return _ok(message=f"Selected thread {threadId}", output=output)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
 
-@mcp.tool()
+@_advanced_tool
 def gdb_frame_select(sessionId: str, frameId: int) -> dict[str, Any]:
     """Select frame by index."""
     try:
+        _require_advanced("gdb_frame_select")
         output = manager.select_frame(session_id=sessionId, frame_id=frameId)
         return _ok(message=f"Selected frame {frameId}", output=output)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
 
-@mcp.tool()
-def gdb_frame_up(sessionId: str, count: int = 1) -> dict[str, Any]:
-    """Move up stack frames."""
-    try:
-        output = manager.frame_up(session_id=sessionId, count=count)
-        return _ok(message=f"Moved up {count} frame(s)", output=output)
-    except RECOVERABLE_ERRORS as exc:
-        return _err(exc)
-
-
-@mcp.tool()
-def gdb_frame_down(sessionId: str, count: int = 1) -> dict[str, Any]:
-    """Move down stack frames."""
-    try:
-        output = manager.frame_down(session_id=sessionId, count=count)
-        return _ok(message=f"Moved down {count} frame(s)", output=output)
-    except RECOVERABLE_ERRORS as exc:
-        return _err(exc)
-
-
-@mcp.tool()
-def gdb_list_source(sessionId: str, location: str | None = None, lineCount: int = 10) -> dict[str, Any]:
-    """List source around current frame or requested location."""
-    try:
-        result = manager.list_source(session_id=sessionId, location=location, line_count=lineCount)
-        source_location = result["source_location"]
-        source_payload: dict[str, Any] | None = None
-        if source_location is not None:
-            source_payload = source_location.to_dict()
-
-        return _ok(
-            message="Source listed",
-            output=result["output"],
-            sourceLocation=source_payload,
-        )
-    except RECOVERABLE_ERRORS as exc:
-        return _err(exc)
-
-
-@mcp.tool()
+@_advanced_tool
 def gdb_collect_crash_report(
     sessionId: str,
     backtraceLimit: int = 20,
@@ -378,19 +398,36 @@ def gdb_collect_crash_report(
 ) -> dict[str, Any]:
     """Collect a compact crash report snapshot from current stop point."""
     try:
+        _require_advanced("gdb_collect_crash_report")
         report = manager.collect_crash_report(
             session_id=sessionId,
             backtrace_limit=backtraceLimit,
             disasm_count=disasmCount,
             stack_words=stackWords,
         )
-        return _ok(message="Crash report collected", report=report)
+        frames = parse_backtrace_frames(report.get("backtrace", ""))
+        registers = parse_registers(report.get("registers", ""))
+        compact_report = {key: value for key, value in report.items() if key not in {"backtrace", "registers"}}
+        if not frames and "backtrace" in report:
+            compact_report["backtrace"] = report["backtrace"]
+        if not registers and "registers" in report:
+            compact_report["registers"] = report["registers"]
+        return _ok(
+            message="Crash report collected",
+            report=compact_report,
+            frames=frames,
+            registers=registers,
+        )
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
 
 def main() -> None:
-    logger.info("Starting gdb-mcp stdio server")
+    logger.info(
+        "Starting gdb-mcp stdio server (mode={}, config={})",
+        settings.mode,
+        settings.config_path,
+    )
     mcp.run(transport="stdio")
 
 

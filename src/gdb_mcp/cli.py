@@ -14,6 +14,7 @@ from gdb_mcp.install import (
     render_manual_config,
     uninstall_mcp_servers,
 )
+from gdb_mcp.settings import load_server_settings
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -62,6 +63,9 @@ def _print_result_table(title: str, rows: list[dict[str, str]]) -> None:
 
 def _cmd_doctor() -> int:
     env = detect_environment()
+    settings = load_server_settings()
+    env["runtime_mode"] = settings.mode
+    env["config_path"] = settings.config_path
     print(json.dumps(env, indent=2))
 
     if env.get("gdb") is None:

@@ -4,34 +4,16 @@ from __future__ import annotations
 
 import atexit
 import os
+import re
 import shlex
 import signal
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 
 from gdb_mcp.exceptions import GdbSessionError, SessionNotFoundError
 from gdb_mcp.gdb_session import GdbSession
-from gdb_mcp.parsing import extract_line_range, parse_info_line, parse_info_source
-
-
-@dataclass
-class SourceLocation:
-    file_path: str
-    line_start: int
-    line_end: int
-    current_line: int
-
-    def to_dict(self) -> dict[str, str | int]:
-        return {
-            "file_path": self.file_path,
-            "line_start": self.line_start,
-            "line_end": self.line_end,
-            "current_line": self.current_line,
-            "vscode_uri": f"vscode://file{self.file_path}:{self.line_start}",
-        }
 
 
 def format_program_arguments(arguments: list[str]) -> str:
@@ -64,6 +46,24 @@ class GdbSessionManager:
         if session is None:
             raise SessionNotFoundError(f"No active GDB session with ID: {session_id}")
         return session
+
+    @staticmethod
+    def _resolve_existing_path(working_dir: Path, raw_path: str, field_name: str) -> Path:
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = (working_dir / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        if not candidate.exists():
+            raise FileNotFoundError(f"{field_name} does not exist: {candidate}")
+        return candidate
+
+    @staticmethod
+    def _parse_frame_index(frame_output: str) -> int | None:
+        match = re.match(r"\s*#(\d+)\b", frame_output)
+        if match is None:
+            return None
+        return int(match.group(1))
 
     def start_session(self, gdb_path: str = "gdb", working_dir: str | None = None) -> dict[str, str]:
         resolved_gdb = self._resolve_gdb_path(gdb_path)
@@ -120,11 +120,7 @@ class GdbSessionManager:
 
     def load_program(self, session_id: str, program: str, arguments: list[str] | None = None) -> dict[str, str]:
         session = self._get_session(session_id)
-        target_path = Path(program)
-        if not target_path.is_absolute():
-            target_path = (session.working_dir / target_path).resolve()
-        if not target_path.exists():
-            raise FileNotFoundError(f"Program path does not exist: {target_path}")
+        target_path = self._resolve_existing_path(session.working_dir, program, "Program path")
 
         load_output = session.execute(f'file "{target_path}"')
         args_output = ""
@@ -148,8 +144,12 @@ class GdbSessionManager:
 
     def load_core(self, session_id: str, program: str, core_path: str) -> dict[str, str]:
         session = self._get_session(session_id)
-        program_out = session.execute(f'file "{program}"')
-        core_out = session.execute(f'core-file "{core_path}"')
+        program_path = self._resolve_existing_path(session.working_dir, program, "Program path")
+        core_file_path = self._resolve_existing_path(session.working_dir, core_path, "Core file path")
+        if any(char.isspace() for char in str(core_file_path)):
+            raise ValueError("core_path must not contain whitespace (gdb core-file parser limitation)")
+        program_out = session.execute(f'file "{program_path}"')
+        core_out = session.execute(f"core-file {core_file_path}")
         bt_out = session.execute("backtrace")
         return {"program_output": program_out, "core_output": core_out, "backtrace_output": bt_out}
 
@@ -207,9 +207,6 @@ class GdbSessionManager:
     def next(self, session_id: str, instructions: bool = False) -> str:
         return self.command(session_id, "nexti" if instructions else "next")
 
-    def finish(self, session_id: str) -> str:
-        return self.command(session_id, "finish")
-
     def backtrace(self, session_id: str, full: bool = False, limit: int | None = None) -> str:
         command = "backtrace full" if full else "backtrace"
         if limit is not None:
@@ -242,61 +239,6 @@ class GdbSessionManager:
             raise ValueError("frame_id must be >= 0")
         return self.command(session_id, f"frame {frame_id}")
 
-    def frame_up(self, session_id: str, count: int = 1) -> str:
-        self._validate_positive_int(count, "count")
-        return self.command(session_id, f"up {count}")
-
-    def frame_down(self, session_id: str, count: int = 1) -> str:
-        self._validate_positive_int(count, "count")
-        return self.command(session_id, f"down {count}")
-
-    def list_source(self, session_id: str, location: str | None = None, line_count: int = 10) -> dict[str, str | SourceLocation | None]:
-        session = self._get_session(session_id)
-        if line_count <= 0:
-            raise ValueError("line_count must be > 0")
-
-        session.execute(f"set listsize {line_count}")
-        command = f"list {location}" if location else "list"
-        output = session.execute(command)
-
-        source_location = self._parse_source_location(session, output)
-        return {
-            "output": output,
-            "source_location": source_location,
-        }
-
-    def _parse_source_location(self, session: GdbSession, list_output: str) -> SourceLocation | None:
-        line_range = extract_line_range(list_output)
-        if line_range is None:
-            return None
-
-        line_start, line_end = line_range
-        info_line_output = session.execute("info line")
-        info = parse_info_line(info_line_output)
-
-        file_path = ""
-        current_line = 0
-        if info is not None:
-            file_path, current_line = info
-        else:
-            info_source_output = session.execute("info source")
-            source = parse_info_source(info_source_output)
-            if source:
-                file_path = source
-
-        if not file_path:
-            return None
-
-        if not Path(file_path).is_absolute():
-            file_path = str((session.working_dir / file_path).resolve())
-
-        return SourceLocation(
-            file_path=file_path,
-            line_start=line_start,
-            line_end=line_end,
-            current_line=current_line,
-        )
-
     def collect_crash_report(
         self,
         session_id: str,
@@ -309,6 +251,15 @@ class GdbSessionManager:
         self._validate_positive_int(stack_words, "stack_words")
 
         session = self._get_session(session_id)
+        original_frame_id: int | None = None
+        try:
+            original_frame = session.execute("frame")
+            original_frame_id = self._parse_frame_index(original_frame)
+            if original_frame_id not in (None, 0):
+                session.execute("frame 0")
+        except (GdbSessionError, ValueError, OSError):
+            original_frame_id = None
+
         commands = {
             "program_info": "info program",
             "current_frame": "frame",
@@ -319,11 +270,18 @@ class GdbSessionManager:
             "stack_memory": f"x/{stack_words}gx $sp",
         }
         report: dict[str, str] = {}
-        for key, command in commands.items():
-            try:
-                report[key] = session.execute(command)
-            except (GdbSessionError, ValueError, OSError) as exc:
-                report[key] = f"[error] {type(exc).__name__}: {exc}"
+        try:
+            for key, command in commands.items():
+                try:
+                    report[key] = session.execute(command)
+                except (GdbSessionError, ValueError, OSError) as exc:
+                    report[key] = f"[error] {type(exc).__name__}: {exc}"
+        finally:
+            if original_frame_id not in (None, 0):
+                try:
+                    session.execute(f"frame {original_frame_id}")
+                except (GdbSessionError, ValueError, OSError):
+                    logger.warning("Failed restoring frame {} for session {}", original_frame_id, session_id)
         return report
 
 
