@@ -242,3 +242,7 @@ def gdb_list_source(sessionId: str, location: str | None = None, lineCount: int 
 def main() -> None:
     logger.info("Starting gdb-mcp stdio server")
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
