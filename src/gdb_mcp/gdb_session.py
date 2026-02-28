@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -13,8 +15,34 @@ from loguru import logger
 from gdb_mcp.exceptions import GdbCommandTimeoutError, GdbSessionError
 
 
+_ANSI_ESCAPE_RE = re.compile(
+    r"""
+    \x1B
+    (?:
+        \[[0-?]*[ -/]*[@-~]   # CSI sequence
+        |\][^\x07\x1B]*(?:\x07|\x1B\\)  # OSC sequence
+        |[@-Z\\-_]            # 2-char sequence
+    )
+    """,
+    re.VERBOSE,
+)
+
+
+_SESSION_BOOTSTRAP_COMMANDS: tuple[str, ...] = (
+    "set pagination off",
+    "set confirm off",
+    "set style enabled off",
+    "set print thread-events off",
+)
+
+
+def _strip_terminal_escapes(raw: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", raw)
+
+
 def _normalize_output(raw: str) -> str:
-    text = raw.replace("\r\n", "\n").replace("\r", "\n")
+    text = _strip_terminal_escapes(raw)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text.strip()
 
 
@@ -40,6 +68,8 @@ class GdbSession:
         startup_timeout: float = 10.0,
     ) -> "GdbSession":
         logger.info("Starting gdb session: id={}, gdb={}, cwd={}", session_id, gdb_path, working_dir)
+        env = dict(os.environ)
+        env["TERM"] = "dumb"
         child = pexpect.spawn(
             gdb_path,
             args=["--quiet", "--nx"],
@@ -47,10 +77,12 @@ class GdbSession:
             encoding="utf-8",
             echo=False,
             timeout=startup_timeout,
+            env=env,
         )
 
         try:
             child.expect_exact("(gdb)")
+            _apply_bootstrap_commands(child, timeout=startup_timeout)
         except pexpect.TIMEOUT as exc:
             child.close(force=True)
             raise GdbCommandTimeoutError("Timed out waiting for gdb prompt during startup") from exc
@@ -118,10 +150,17 @@ class GdbSession:
                 self.child.close(force=True)
 
     def to_dict(self) -> dict[str, str]:
+        started_at = self.started_at.isoformat().replace("+00:00", "Z")
         return {
             "id": self.session_id,
             "target": self.target or "No program loaded",
             "working_dir": str(self.working_dir),
             "gdb_path": self.gdb_path,
-            "started_at": self.started_at.isoformat() + "Z",
+            "started_at": started_at,
         }
+
+
+def _apply_bootstrap_commands(child: pexpect.spawn, timeout: float) -> None:
+    for command in _SESSION_BOOTSTRAP_COMMANDS:
+        child.sendline(command)
+        child.expect_exact("(gdb)", timeout=timeout)
