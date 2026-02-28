@@ -29,6 +29,9 @@ def test_stdio_server_initialize_list_and_call() -> None:
                 tool_names = {tool.name for tool in tools_result.tools}
                 assert "gdb_start" in tool_names
                 assert "gdb_list_sessions" in tool_names
+                assert "gdb_set_args" in tool_names
+                assert "gdb_list_breakpoints" in tool_names
+                assert "gdb_collect_crash_report" in tool_names
 
                 call_result = await session.call_tool("gdb_list_sessions", {})
                 assert call_result.isError is False

@@ -63,12 +63,17 @@ uv run gdb-mcp uninstall
 
 - `gdb_start`
 - `gdb_load`
+- `gdb_set_args`
 - `gdb_command`
 - `gdb_terminate`
 - `gdb_list_sessions`
 - `gdb_attach`
 - `gdb_load_core`
 - `gdb_set_breakpoint`
+- `gdb_list_breakpoints`
+- `gdb_delete_breakpoints`
+- `gdb_toggle_breakpoints`
+- `gdb_set_watchpoint`
 - `gdb_continue`
 - `gdb_step`
 - `gdb_next`
@@ -77,7 +82,13 @@ uv run gdb-mcp uninstall
 - `gdb_print`
 - `gdb_examine`
 - `gdb_info_registers`
+- `gdb_info_threads`
+- `gdb_thread_select`
+- `gdb_frame_select`
+- `gdb_frame_up`
+- `gdb_frame_down`
 - `gdb_list_source`
+- `gdb_collect_crash_report`
 
 ## Example
 

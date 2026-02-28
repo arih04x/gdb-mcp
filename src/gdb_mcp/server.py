@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import shlex
 from typing import Any
 
 from loguru import logger
@@ -38,6 +40,29 @@ def _err(exc: BaseException) -> dict[str, Any]:
     }
 
 
+def _normalize_arguments(arguments: list[str] | str | None) -> list[str] | None:
+    if arguments is None:
+        return None
+    if isinstance(arguments, list):
+        if not all(isinstance(value, str) for value in arguments):
+            raise ValueError("arguments must be a list of strings")
+        return arguments
+    text = arguments.strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return shlex.split(text)
+    if isinstance(parsed, list) and all(isinstance(value, str) for value in parsed):
+        return parsed
+    if isinstance(parsed, str):
+        return shlex.split(parsed)
+    if isinstance(parsed, (int, float, bool)):
+        return [str(parsed)]
+    raise ValueError("string arguments must be shell-like text or a JSON string array/object-free scalar")
+
+
 @mcp.tool()
 def gdb_start(gdbPath: str = "gdb", workingDir: str | None = None) -> dict[str, Any]:
     """Start a new GDB session."""
@@ -55,16 +80,30 @@ def gdb_start(gdbPath: str = "gdb", workingDir: str | None = None) -> dict[str, 
 
 
 @mcp.tool()
-def gdb_load(sessionId: str, program: str, arguments: list[str] | None = None) -> dict[str, Any]:
+def gdb_load(sessionId: str, program: str, arguments: list[str] | str | None = None) -> dict[str, Any]:
     """Load a program into GDB."""
     try:
-        result = manager.load_program(session_id=sessionId, program=program, arguments=arguments)
+        normalized_args = _normalize_arguments(arguments)
+        result = manager.load_program(session_id=sessionId, program=program, arguments=normalized_args)
         return _ok(
             message=f"Program loaded: {result['target']}",
             target=result["target"],
             loadOutput=result["load_output"],
             argsOutput=result["args_output"],
         )
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_set_args(sessionId: str, arguments: list[str] | str) -> dict[str, Any]:
+    """Set program arguments for the current target."""
+    try:
+        normalized_args = _normalize_arguments(arguments)
+        if normalized_args is None:
+            normalized_args = []
+        output = manager.set_program_args(session_id=sessionId, arguments=normalized_args)
+        return _ok(message="Program arguments updated", output=output)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
@@ -131,6 +170,47 @@ def gdb_set_breakpoint(sessionId: str, location: str, condition: str | None = No
             breakpointOutput=result["breakpoint_output"],
             conditionOutput=result["condition_output"],
         )
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_list_breakpoints(sessionId: str) -> dict[str, Any]:
+    """List breakpoints/watchpoints in current session."""
+    try:
+        output = manager.list_breakpoints(session_id=sessionId)
+        return _ok(message="Breakpoints listed", output=output)
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_delete_breakpoints(sessionId: str, breakpointIds: list[int] | None = None) -> dict[str, Any]:
+    """Delete all breakpoints or selected breakpoint IDs."""
+    try:
+        output = manager.delete_breakpoints(session_id=sessionId, breakpoint_ids=breakpointIds)
+        return _ok(message="Breakpoints deleted", output=output)
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_toggle_breakpoints(sessionId: str, breakpointIds: list[int], enabled: bool) -> dict[str, Any]:
+    """Enable or disable selected breakpoint IDs."""
+    try:
+        output = manager.toggle_breakpoints(session_id=sessionId, breakpoint_ids=breakpointIds, enabled=enabled)
+        state = "enabled" if enabled else "disabled"
+        return _ok(message=f"Breakpoints {state}", output=output)
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_set_watchpoint(sessionId: str, expression: str, mode: str = "write") -> dict[str, Any]:
+    """Set a write/read/access watchpoint on expression."""
+    try:
+        output = manager.set_watchpoint(session_id=sessionId, expression=expression, mode=mode)
+        return _ok(message=f"Watchpoint set ({mode})", output=output)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 
@@ -221,6 +301,56 @@ def gdb_info_registers(sessionId: str, register: str | None = None) -> dict[str,
 
 
 @mcp.tool()
+def gdb_info_threads(sessionId: str) -> dict[str, Any]:
+    """List threads for current inferior."""
+    try:
+        output = manager.info_threads(session_id=sessionId)
+        return _ok(message="Thread info collected", output=output)
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_thread_select(sessionId: str, threadId: int) -> dict[str, Any]:
+    """Select an active thread."""
+    try:
+        output = manager.select_thread(session_id=sessionId, thread_id=threadId)
+        return _ok(message=f"Selected thread {threadId}", output=output)
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_frame_select(sessionId: str, frameId: int) -> dict[str, Any]:
+    """Select frame by index."""
+    try:
+        output = manager.select_frame(session_id=sessionId, frame_id=frameId)
+        return _ok(message=f"Selected frame {frameId}", output=output)
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_frame_up(sessionId: str, count: int = 1) -> dict[str, Any]:
+    """Move up stack frames."""
+    try:
+        output = manager.frame_up(session_id=sessionId, count=count)
+        return _ok(message=f"Moved up {count} frame(s)", output=output)
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_frame_down(sessionId: str, count: int = 1) -> dict[str, Any]:
+    """Move down stack frames."""
+    try:
+        output = manager.frame_down(session_id=sessionId, count=count)
+        return _ok(message=f"Moved down {count} frame(s)", output=output)
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
 def gdb_list_source(sessionId: str, location: str | None = None, lineCount: int = 10) -> dict[str, Any]:
     """List source around current frame or requested location."""
     try:
@@ -235,6 +365,26 @@ def gdb_list_source(sessionId: str, location: str | None = None, lineCount: int 
             output=result["output"],
             sourceLocation=source_payload,
         )
+    except RECOVERABLE_ERRORS as exc:
+        return _err(exc)
+
+
+@mcp.tool()
+def gdb_collect_crash_report(
+    sessionId: str,
+    backtraceLimit: int = 20,
+    disasmCount: int = 8,
+    stackWords: int = 16,
+) -> dict[str, Any]:
+    """Collect a compact crash report snapshot from current stop point."""
+    try:
+        report = manager.collect_crash_report(
+            session_id=sessionId,
+            backtrace_limit=backtraceLimit,
+            disasm_count=disasmCount,
+            stack_words=stackWords,
+        )
+        return _ok(message="Crash report collected", report=report)
     except RECOVERABLE_ERRORS as exc:
         return _err(exc)
 

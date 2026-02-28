@@ -103,6 +103,21 @@ class GdbSessionManager:
         session = self._get_session(session_id)
         return session.execute(command, timeout=timeout)
 
+    @staticmethod
+    def _validate_positive_int(value: int, field_name: str) -> None:
+        if not isinstance(value, int):
+            raise ValueError(f"{field_name} must be an integer")
+        if value <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+
+    @classmethod
+    def _format_number_list(cls, values: list[int], field_name: str) -> str:
+        if not values:
+            raise ValueError(f"{field_name} must not be empty")
+        for value in values:
+            cls._validate_positive_int(value, field_name)
+        return " ".join(str(value) for value in values)
+
     def load_program(self, session_id: str, program: str, arguments: list[str] | None = None) -> dict[str, str]:
         session = self._get_session(session_id)
         target_path = Path(program)
@@ -113,11 +128,20 @@ class GdbSessionManager:
 
         load_output = session.execute(f'file "{target_path}"')
         args_output = ""
-        if arguments:
-            args_output = session.execute(f"set args {format_program_arguments(arguments)}")
+        if arguments is not None:
+            args_output = self.set_program_args(session_id=session_id, arguments=arguments)
 
         session.target = str(target_path)
         return {"target": str(target_path), "load_output": load_output, "args_output": args_output}
+
+    def set_program_args(self, session_id: str, arguments: list[str]) -> str:
+        session = self._get_session(session_id)
+        for argument in arguments:
+            if not isinstance(argument, str):
+                raise ValueError("arguments must be a list of strings")
+        if not arguments:
+            return session.execute("set args")
+        return session.execute(f"set args {format_program_arguments(arguments)}")
 
     def attach(self, session_id: str, pid: int) -> str:
         return self.command(session_id, f"attach {pid}")
@@ -146,6 +170,33 @@ class GdbSessionManager:
             "breakpoint_output": breakpoint_output,
             "condition_output": condition_output,
         }
+
+    def list_breakpoints(self, session_id: str) -> str:
+        return self.command(session_id, "info breakpoints")
+
+    def delete_breakpoints(self, session_id: str, breakpoint_ids: list[int] | None = None) -> str:
+        if breakpoint_ids is None:
+            return self.command(session_id, "delete")
+        formatted_ids = self._format_number_list(breakpoint_ids, "breakpoint_ids")
+        return self.command(session_id, f"delete {formatted_ids}")
+
+    def toggle_breakpoints(self, session_id: str, breakpoint_ids: list[int], enabled: bool) -> str:
+        formatted_ids = self._format_number_list(breakpoint_ids, "breakpoint_ids")
+        toggle_command = "enable" if enabled else "disable"
+        return self.command(session_id, f"{toggle_command} {formatted_ids}")
+
+    def set_watchpoint(self, session_id: str, expression: str, mode: str = "write") -> str:
+        if not expression.strip():
+            raise ValueError("expression must not be empty")
+        mode_to_command = {
+            "write": "watch",
+            "read": "rwatch",
+            "access": "awatch",
+        }
+        command = mode_to_command.get(mode)
+        if command is None:
+            raise ValueError("mode must be one of: write, read, access")
+        return self.command(session_id, f"{command} {expression}")
 
     def continue_execution(self, session_id: str) -> str:
         return self.command(session_id, "continue")
@@ -176,6 +227,28 @@ class GdbSessionManager:
         if register:
             command = f"{command} {register}"
         return self.command(session_id, command)
+
+    def info_threads(self, session_id: str) -> str:
+        return self.command(session_id, "info threads")
+
+    def select_thread(self, session_id: str, thread_id: int) -> str:
+        self._validate_positive_int(thread_id, "thread_id")
+        return self.command(session_id, f"thread {thread_id}")
+
+    def select_frame(self, session_id: str, frame_id: int) -> str:
+        if not isinstance(frame_id, int):
+            raise ValueError("frame_id must be an integer")
+        if frame_id < 0:
+            raise ValueError("frame_id must be >= 0")
+        return self.command(session_id, f"frame {frame_id}")
+
+    def frame_up(self, session_id: str, count: int = 1) -> str:
+        self._validate_positive_int(count, "count")
+        return self.command(session_id, f"up {count}")
+
+    def frame_down(self, session_id: str, count: int = 1) -> str:
+        self._validate_positive_int(count, "count")
+        return self.command(session_id, f"down {count}")
 
     def list_source(self, session_id: str, location: str | None = None, line_count: int = 10) -> dict[str, str | SourceLocation | None]:
         session = self._get_session(session_id)
@@ -223,6 +296,35 @@ class GdbSessionManager:
             line_end=line_end,
             current_line=current_line,
         )
+
+    def collect_crash_report(
+        self,
+        session_id: str,
+        backtrace_limit: int = 20,
+        disasm_count: int = 8,
+        stack_words: int = 16,
+    ) -> dict[str, str]:
+        self._validate_positive_int(backtrace_limit, "backtrace_limit")
+        self._validate_positive_int(disasm_count, "disasm_count")
+        self._validate_positive_int(stack_words, "stack_words")
+
+        session = self._get_session(session_id)
+        commands = {
+            "program_info": "info program",
+            "current_frame": "frame",
+            "thread_info": "info threads",
+            "backtrace": f"backtrace {backtrace_limit}",
+            "registers": "info registers",
+            "pc_disassembly": f"x/{disasm_count}i $pc",
+            "stack_memory": f"x/{stack_words}gx $sp",
+        }
+        report: dict[str, str] = {}
+        for key, command in commands.items():
+            try:
+                report[key] = session.execute(command)
+            except (GdbSessionError, ValueError, OSError) as exc:
+                report[key] = f"[error] {type(exc).__name__}: {exc}"
+        return report
 
 
 def install_signal_cleanup(manager: GdbSessionManager) -> None:

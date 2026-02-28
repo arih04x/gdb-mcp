@@ -69,6 +69,30 @@ uv run gdb-mcp config
 {"tool":"gdb_terminate","arguments":{"sessionId":"<SESSION_ID>"}}
 ```
 
+## 4. Advanced workflow (breakpoint lifecycle + crash snapshot)
+
+1. Update args independently:
+
+```json
+{"tool":"gdb_set_args","arguments":{"sessionId":"<SESSION_ID>","arguments":"15"}}
+```
+
+2. Inspect and toggle breakpoints:
+
+```json
+{"tool":"gdb_list_breakpoints","arguments":{"sessionId":"<SESSION_ID>"}}
+```
+
+```json
+{"tool":"gdb_toggle_breakpoints","arguments":{"sessionId":"<SESSION_ID>","breakpointIds":[2],"enabled":false}}
+```
+
+3. Capture crash context:
+
+```json
+{"tool":"gdb_collect_crash_report","arguments":{"sessionId":"<SESSION_ID>","backtraceLimit":10,"disasmCount":8,"stackWords":16}}
+```
+
 ## Expected behavior
 
 When argument `15` is passed, `function_that_crashes()` dereferences a null pointer and triggers a crash. Use `gdb_backtrace` to inspect the crash stack.
