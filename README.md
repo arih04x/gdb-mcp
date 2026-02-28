@@ -1,28 +1,57 @@
 # gdb-mcp
 
-Python MCP server for interactive GDB debugging.
+English | [简体中文](README.zh-CN.md)
 
-## Features
+<div align="center">
+  <img src="asset/gdb.svg" alt="gdb-mcp logo" width="140"/>
+  <h3>GDB MCP Server for AI Debugging Workflows</h3>
+  <p>Expose practical GDB capabilities as MCP tools for assistants and automation.</p>
 
-- Manage multiple GDB sessions.
-- Load binaries / attach / load core dumps.
-- Set breakpoints and control execution (`continue`, `step`, `next`, `finish`).
-- Inspect stack, registers, memory, expressions, and source location.
-- Install MCP config to common clients (`gdb-mcp install`).
+  <p>
+    <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue.svg" />
+    <img alt="GDB" src="https://img.shields.io/badge/GDB-required-red.svg" />
+    <img alt="MCP" src="https://img.shields.io/badge/MCP-enabled-green.svg" />
+    <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-lightgrey.svg" />
+  </p>
+</div>
+
+## What Is `asset/gdb.svg`?
+
+`asset/gdb.svg` is the project identity icon. It is used as the default visual mark for `gdb-mcp` in documentation and tooling pages.
+
+## Overview
+
+`gdb-mcp` is a Python MCP server that turns common GDB operations into MCP tools.
+It is designed for:
+
+- interactive AI-assisted debugging
+- repeatable local debugging workflows
+- lightweight integration into MCP-compatible clients
+
+## Key Features
+
+- Multi-session GDB management
+- Program load / process attach / core dump load
+- Breakpoints and execution control (`continue`, `step`, `next`, `finish`)
+- Runtime inspection: backtrace, registers, memory, expressions, source listing
+- MCP client config installer (`gdb-mcp install`)
 
 ## Quick Start
 
+Requirements:
+
+- Python 3.11+
+- `uv`
+- `gdb`
+
+Install and run:
+
 ```bash
 uv sync --extra dev
-```
-
-Run MCP stdio server:
-
-```bash
 uv run gdb-mcp
 ```
 
-## MCP Install Commands
+## CLI Commands
 
 ```bash
 uv run gdb-mcp doctor
@@ -31,7 +60,7 @@ uv run gdb-mcp config
 uv run gdb-mcp uninstall
 ```
 
-## Tools
+## Tool List
 
 - `gdb_start`
 - `gdb_load`
@@ -55,15 +84,21 @@ uv run gdb-mcp uninstall
 
 See [examples/USAGE.md](examples/USAGE.md).
 
-Build sample:
+Build the sample:
 
 ```bash
 cd examples
 gcc -g -O0 crash.c -o crash
 ```
 
-## Tests
+## Testing
 
 ```bash
 uv run pytest -q
 ```
+
+## Troubleshooting
+
+- `gdb` not found: run `uv run gdb-mcp doctor` and install `gdb` first.
+- MCP tools fail unexpectedly: verify your target path and session id.
+- Client config not installed: run `gdb-mcp install` and restart the MCP client.
