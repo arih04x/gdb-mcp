@@ -1,0 +1,46 @@
+[project]
+name = "gdb-mcp"
+version = "0.1.0"
+description = "MCP server for GDB debugging workflows"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "gdb-mcp contributors" },
+]
+keywords = ["gdb", "mcp", "debugger", "reverse-engineering"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Debuggers",
+]
+dependencies = [
+    "mcp>=1.20.0",
+    "loguru>=0.7.2",
+    "pexpect>=4.9.0",
+    "tomli-w>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.2",
+]
+
+[project.scripts]
+gdb-mcp = "gdb_mcp.cli:main"
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+markers = [
+    "integration: marks tests that run real gdb processes",
+]

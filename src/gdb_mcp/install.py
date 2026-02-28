@@ -1,0 +1,220 @@
+"""Installer utilities for MCP client configuration."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+import tomli_w
+from loguru import logger
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
+
+
+@dataclass(frozen=True)
+class InstallTarget:
+    name: str
+    path: Path
+    fmt: str
+    key_path: tuple[str, ...]
+
+
+def get_python_executable() -> str:
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        candidate = Path(venv) / ("Scripts" if sys.platform == "win32" else "bin") / (
+            "python.exe" if sys.platform == "win32" else "python3"
+        )
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
+
+
+def generate_stdio_config() -> dict[str, object]:
+    return {
+        "command": get_python_executable(),
+        "args": ["-m", "gdb_mcp.server"],
+    }
+
+
+def get_install_targets() -> list[InstallTarget]:
+    home = Path.home()
+    if sys.platform == "win32":
+        appdata = Path(os.getenv("APPDATA", ""))
+        return [
+            InstallTarget("Claude", appdata / "Claude" / "claude_desktop_config.json", "json", ("mcpServers",)),
+            InstallTarget("Claude Code", home / ".claude.json", "json", ("mcpServers",)),
+            InstallTarget("Cursor", home / ".cursor" / "mcp.json", "json", ("mcpServers",)),
+            InstallTarget("Codex", home / ".codex" / "config.toml", "toml", ("mcp_servers",)),
+            InstallTarget("VS Code", appdata / "Code" / "User" / "settings.json", "json", ("mcp", "servers")),
+        ]
+
+    if sys.platform == "darwin":
+        return [
+            InstallTarget(
+                "Claude",
+                home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json",
+                "json",
+                ("mcpServers",),
+            ),
+            InstallTarget("Claude Code", home / ".claude.json", "json", ("mcpServers",)),
+            InstallTarget("Cursor", home / ".cursor" / "mcp.json", "json", ("mcpServers",)),
+            InstallTarget("Codex", home / ".codex" / "config.toml", "toml", ("mcp_servers",)),
+            InstallTarget(
+                "VS Code",
+                home / "Library" / "Application Support" / "Code" / "User" / "settings.json",
+                "json",
+                ("mcp", "servers"),
+            ),
+        ]
+
+    return [
+        InstallTarget("Claude", home / ".config" / "Claude" / "claude_desktop_config.json", "json", ("mcpServers",)),
+        InstallTarget("Claude Code", home / ".claude.json", "json", ("mcpServers",)),
+        InstallTarget("Cursor", home / ".cursor" / "mcp.json", "json", ("mcpServers",)),
+        InstallTarget("Codex", home / ".codex" / "config.toml", "toml", ("mcp_servers",)),
+        InstallTarget("Windsurf", home / ".codeium" / "windsurf" / "mcp_config.json", "json", ("mcpServers",)),
+        InstallTarget("VS Code", home / ".config" / "Code" / "User" / "settings.json", "json", ("mcp", "servers")),
+    ]
+
+
+def _load_config(path: Path, fmt: str) -> dict[str, object]:
+    if not path.exists():
+        return {}
+
+    if fmt == "toml":
+        raw = path.read_bytes()
+        if not raw:
+            return {}
+        return tomllib.loads(raw.decode("utf-8"))
+
+    raw_text = path.read_text(encoding="utf-8")
+    if not raw_text.strip():
+        return {}
+    return json.loads(raw_text)
+
+
+def _dump_config(path: Path, fmt: str, config: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = ".toml" if fmt == "toml" else ".json"
+
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", suffix=suffix, dir=str(path.parent), text=True)
+    tmp = Path(tmp_path)
+    try:
+        if fmt == "toml":
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(tomli_w.dumps(config).encode("utf-8"))
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(config, handle, indent=2)
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError):
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        raise
+
+
+def _ensure_nested_dict(config: dict[str, object], key_path: tuple[str, ...]) -> dict[str, object]:
+    cursor: dict[str, object] = config
+    for key in key_path:
+        value = cursor.get(key)
+        if value is None:
+            next_cursor: dict[str, object] = {}
+            cursor[key] = next_cursor
+            cursor = next_cursor
+            continue
+        if not isinstance(value, dict):
+            raise ValueError(f"Config key {'.'.join(key_path)} exists but is not an object")
+        cursor = value
+    return cursor
+
+
+def update_mcp_config(config: dict[str, object], key_path: tuple[str, ...], server_name: str, uninstall: bool) -> bool:
+    servers = _ensure_nested_dict(config, key_path)
+    if uninstall:
+        if server_name in servers:
+            del servers[server_name]
+            return True
+        return False
+
+    servers[server_name] = generate_stdio_config()
+    return True
+
+
+def detect_environment() -> dict[str, object]:
+    from shutil import which
+
+    targets = get_install_targets()
+    available_targets = [target for target in targets if target.path.parent.exists()]
+
+    return {
+        "python": get_python_executable(),
+        "gdb": which("gdb"),
+        "uv": which("uv"),
+        "platform": sys.platform,
+        "available_clients": [target.name for target in available_targets],
+    }
+
+
+def install_mcp_servers(server_name: str = "gdb", quiet: bool = False) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    for target in get_install_targets():
+        if not target.path.parent.exists():
+            results.append({"client": target.name, "status": "skipped", "reason": "config dir not found"})
+            continue
+
+        try:
+            config = _load_config(target.path, target.fmt)
+            changed = update_mcp_config(config, target.key_path, server_name=server_name, uninstall=False)
+            if changed:
+                _dump_config(target.path, target.fmt, config)
+            status = "installed" if changed else "unchanged"
+            results.append({"client": target.name, "status": status, "path": str(target.path)})
+            if not quiet:
+                logger.info("{} -> {} ({})", target.name, status, target.path)
+        except (json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+            results.append({"client": target.name, "status": "failed", "reason": f"invalid config: {exc}"})
+        except (OSError, ValueError, TypeError) as exc:
+            results.append({"client": target.name, "status": "failed", "reason": str(exc)})
+    return results
+
+
+def uninstall_mcp_servers(server_name: str = "gdb", quiet: bool = False) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    for target in get_install_targets():
+        if not target.path.exists():
+            results.append({"client": target.name, "status": "skipped", "reason": "config file not found"})
+            continue
+
+        try:
+            config = _load_config(target.path, target.fmt)
+            changed = update_mcp_config(config, target.key_path, server_name=server_name, uninstall=True)
+            if changed:
+                _dump_config(target.path, target.fmt, config)
+            status = "uninstalled" if changed else "not-installed"
+            results.append({"client": target.name, "status": status, "path": str(target.path)})
+            if not quiet:
+                logger.info("{} -> {} ({})", target.name, status, target.path)
+        except (json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+            results.append({"client": target.name, "status": "failed", "reason": f"invalid config: {exc}"})
+        except (OSError, ValueError, TypeError) as exc:
+            results.append({"client": target.name, "status": "failed", "reason": str(exc)})
+    return results
+
+
+def render_manual_config(server_name: str = "gdb") -> str:
+    json_payload = {"mcpServers": {server_name: generate_stdio_config()}}
+    toml_payload = {"mcp_servers": {server_name: generate_stdio_config()}}
+    return (
+        "[JSON config]\n"
+        + json.dumps(json_payload, indent=2)
+        + "\n\n[TOML config]\n"
+        + tomli_w.dumps(toml_payload)
+    )
