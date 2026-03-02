@@ -108,10 +108,11 @@ def gdb_get_capabilities() -> dict[str, Any]:
 
 
 @mcp.tool()
-def gdb_start(gdbPath: str = "gdb", workingDir: str | None = None) -> dict[str, Any]:
+def gdb_start(gdbPath: str | None = None, workingDir: str | None = None) -> dict[str, Any]:
     """Start a new GDB session."""
     try:
-        result = manager.start_session(gdb_path=gdbPath, working_dir=workingDir)
+        resolved_path = (gdbPath or "").strip() or settings.gdb_path
+        result = manager.start_session(gdb_path=resolved_path, working_dir=workingDir)
         return _ok(
             message=f"GDB session started: {result['session_id']}",
             sessionId=result["session_id"],

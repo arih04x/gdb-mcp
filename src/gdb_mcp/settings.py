@@ -75,6 +75,7 @@ class ServerSettings:
     advanced_tools: frozenset[str]
     command_policy: CommandPolicy
     config_path: str
+    gdb_path: str
 
     def is_advanced(self) -> bool:
         return self.mode == "advanced"
@@ -97,7 +98,20 @@ def _project_root() -> Path:
 def _resolve_config_path() -> Path:
     configured = os.getenv("GDB_MCP_CONFIG")
     if not configured:
-        return _project_root() / "config.json"
+        cwd = Path.cwd().resolve()
+        candidates: list[Path] = [
+            cwd / "config.json",
+            _project_root() / "config.json",
+        ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+
+        raise FileNotFoundError(
+            "gdb-mcp config.json not found. Set GDB_MCP_CONFIG to an absolute path, "
+            "or run from a directory that contains config.json."
+        )
 
     candidate = Path(configured).expanduser()
     if candidate.is_absolute():
@@ -148,7 +162,7 @@ def load_server_settings() -> ServerSettings:
     if mode not in {"default", "advanced"}:
         raise ValueError("mode must be either 'default' or 'advanced'")
 
-    max_output_chars = int(config.get("max_output_chars", 20000))
+    max_output_chars = int(config.get("max_output_chars", 20000))  # type: ignore
     if max_output_chars <= 0:
         raise ValueError("max_output_chars must be > 0")
 
@@ -194,10 +208,18 @@ def load_server_settings() -> ServerSettings:
         deny_prefixes=deny_prefixes,
         dangerous_prefixes=dangerous_prefixes,
     )
+
+    gdb_path = str(config.get("gdb_path") or config.get("gdbPath") or "gdb").strip()
+    if env_gdb_path := os.getenv("GDB_MCP_GDB_PATH"):
+        gdb_path = env_gdb_path.strip()
+    if not gdb_path:
+        gdb_path = "gdb"
+
     return ServerSettings(
         mode=mode,
         max_output_chars=max_output_chars,
         advanced_tools=advanced_tools,
         command_policy=policy,
         config_path=str(path),
+        gdb_path=gdb_path,
     )

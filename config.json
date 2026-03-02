@@ -1,6 +1,7 @@
 {
   "mode": "advanced",
   "max_output_chars": 20000,
+  "gdb_path": "C:\\msys64\\ucrt64\\bin\\gdb.exe",
   "advanced_tools": [
     "gdb_attach",
     "gdb_load_core",
